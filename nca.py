@@ -1,98 +1,147 @@
-import equinox as eqx
-import equinox.nn as nn
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import jax.random as random
 import chex
 from functools import partial
+from typing import Iterable
+
+from ndp import NDP_Trainer, Config
+
+
+#==================================================================================================
+#==================================================================================================
+#==================================================================================================
 
 @chex.dataclass
-class NcaConfig:
+class NCA_Config:
 	channels: int
 	alpha: float = 0.1
 	perception_dims: int = 3
-	hidden_dims: int = 64
+	update_features: Iterable[int] = (64, 64)
+	mask: jnp.array = None
 
+class PerceptionNet(nn.Module):
+	config: NCA_Config
 
-class PerceptionNet(eqx.Module):
-
-	config: NcaConfig
-	perception: eqx.Module
-
-	def __init__(self, config: NcaConfig, key: random.PRNGKey):
-
-		self.config = config
-		self.perception = nn.Conv3d(in_channels=config.channels, out_channels=config.channels*config.perception_dims,
-			kernel_size=3, groups=config.channels, stride=1, use_bias=False, padding=1, key=key)
+	def setup(self):
+		total_features = self.config.perception_dims * self.config.channels
+		self.conv = nn.Conv(features=total_features, kernel_size=(3,3,3), strides=(1,1,1), padding="SAME", 
+			feature_group_count=self.config.channels, use_bias=False)
 
 	def __call__(self, x):
-		return self.perception(x)
+		return self.conv(x)
 
+class UpdateNetwork(nn.Module):
+	config: NCA_Config
 
-class UpdateNet(eqx.Module):
-
-	config: NcaConfig
-	layers: list
-
-	def __init__(self, config: NcaConfig, key: random.PRNGKey):
-		
-		self.config = config
-		key1, key2, key3 = random.split(key, 3)
+	def setup(self):
 		self.layers = [
-			nn.Conv3d(in_channels=config.channels*config.perception_dims, out_channels=config.hidden_dims, kernel_size=1, use_bias=False, key=key1),
-			nn.Conv3d(in_channels=config.hidden_dims, out_channels=config.hidden_dims, kernel_size=1, use_bias=False, key=key2),
-			nn.Conv3d(in_channels=64, out_channels=config.channels, kernel_size=1, use_bias=False, key=key3)
+			nn.Conv(feat, kernel_size=(1,1,1), strides=(1,1,1), padding="SAME", use_bias=False)
+			for feat in self.config.update_features
 		]
+		self.out_layer = nn.Conv(self.config.channels, kernel_size=(1,1,1), strides=(1,1,1), padding="SAME", use_bias=False)
 
 	def __call__(self, x):
+		for layer in self.layers:
+			x = nn.relu(layer(x))
+		return self.out_layer(x)
 
-		for layer in self.layers[:-1]:
-			x = jax.nn.relu(layer(x))
-		return self.layers[-1](x)
+class NCA3D(nn.Module):
 
+	config: NCA_Config
 
-class Nca3d(eqx.Module):
-
-	config: NcaConfig
-	perception: eqx.Module
-	update: eqx.Module
-	is_alive: eqx.Module
-
-	def __init__(self, config: NcaConfig, key: random.PRNGKey):
-		
-		key1, key2 = random.split(key)
-		self.config = config
-		
-		self.perception = PerceptionNet(config, key1)
-
-		self.update = UpdateNet(config, key2)
-
-		self.is_alive = nn.MaxPool3d(kernel_size=3, stride=1, padding=1)
+	def setup(self):
+		self.perception_net = PerceptionNet(config)
+		self.update_net = UpdateNetwork(config)
+		self.mask = self.config.mask is self.config.mask is not None else 1.
 
 	def __call__(self, x):
 		
-		alive_mask = self.is_alive(x[-1:, ...]) > self.config.alpha
-		p = self.perception(x)
-		dx = self.update(p)
-		x_ = x + dx
-		alive_mask = alive_mask & (self.is_alive(x_[-1:, ...]) > self.config.alpha)
-		alive_mask = alive_mask.astype(float)
+		life_mask = nn.max_pool(x[..., -1:], (3,3,3), padding="SAME") > self.config.alpha
+		percept = self.perception_net(x)
+		dx = self.update_net(percept)
+		x = x + dx
+		life_mask = life_mask & (nn.max_pool(x[..., -1:], (3,3,3), padding="SAME") > self.config.alpha)
+		life_mask = life_mask.astype(float) * self.mask
+		return x * life_mask
 
-		return x_ * 
+#==================================================================================================
+#==================================================================================================
+#==================================================================================================
 
-def zero_nca(nca):
-	"""zero out the zeights of the last layer of the NCA update network"""
-	return eqx.tree_at(lambda nca: nca.update.layers[-1].weight, nca, replace_fn=lambda w: w*0.)
+@chex.dataclass
+class NDP_NCA_Config(Config):
+	nca_config: NCA_Config
+	iterations: int = 10
+
+class NCA_Trainer(NDP_Trainer):
+
+	#-------------------------------------------------------------------------
+
+	def __init__(self, config: NDP_NCA_Config):
+		assert isinstance(config, NDP_NCA_Config)
+		super().__init__(config)	
+
+	#-------------------------------------------------------------------------
+
+	def init_ndp(self):
 
 
-@eqx.filter_jit
-def rollout(nca: Nca3d, x: jnp.array):
-	def step(carry, x):
-		x_ = nca(carry)
-		return x_, x_
-	xs = jnp.arange(3)
-	return jax.lax.scan(step, x, xs)
+		H, W, D = self.config.hidden_dims, self.config.hidden_dims, self.config.hidden_layers+1
+		z_dims = C = self.config.nca_config.channels
+		#Generate mask
+		mask = jnp.zeros((H,W,D,1))
+		idims = self.config.input_dims
+		odims = self.config.output_dims
+		xi = H//2 - idims//2
+		mask = mask.at[x:x+idims, :, 0, :].set(1.)
+		mask = mask.at[:, :, 1:-1, :].set(1.)
+		xo = W//2 - odims//2
+		mask = mask.at[:, x:x+odims, -1, :].set(1.)
+		#initiate nca
+		nca_config = self.config.nca_config
+		nca_config.mask = mask
+		nca = NCA3D(self.config.nca_config)
+		x = jnp.zeros((H,W,D,C))
+		params = nca.init(random.PRNGKey(42), x)
+		params_shaper = ParameterReshaper(params)
 
-@eqx.filter_jit
-def rollout_final(nca, x):
-	return jax.lax.fori_loop(0, 5, lambda i, x : nca(x), x)
+		def init_w(z):
+			"""compute initial w matrix with seed z at the center"""
+			w = jnp.zeros((H, W, D, C))
+			w = w.at[H//2, W//2, D//2, :].set(z.at[-1].set(1.))
+			return w
+
+		def ndp(ndp_params: Collection, z: jnp.array)->Collection:
+			w = init_w(z)
+			w = jax.lax.foriloop(0, self.config.iterations, 
+				lambda i, x: nca.apply(ndp_params, x), w)
+			mlp_params = {
+				"layers_0": {"kernel": w[xi:xi+idims, :, 0, 0]},
+				"out_layer": {"kernel": w[:, xo:xo+odims, -1, 0]},
+				**{
+					f"layers_{i}": {"kernel": w[:, :, i, 0]}
+				for i in range(1, D)}
+			}
+			mlp_params = {"params": mlp_params}
+			return mlp_params
+
+		return ndp, params_shaper, z_dims
+
+	#-------------------------------------------------------------------------
+
+
+#==================================================================================================
+#==================================================================================================
+#==================================================================================================
+
+		
+
+if __name__ == "__main__":
+	config = NCA_Config(channels=8)
+	nca = NCA3D(config)
+	x = jnp.zeros((32, 32, 32, config.channels))
+	# params = nca.init(random.PRNGKey(42), x)
+	x_ = nca.apply(params, x)
+
