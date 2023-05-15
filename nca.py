@@ -4,9 +4,11 @@ import jax.numpy as jnp
 import jax.random as random
 import chex
 from functools import partial
-from typing import Iterable
+from typing import *
+from dataclasses import field
+from evosax import ParameterReshaper
 
-from ndp import NDP_Trainer, Config
+from metandp import NDP_Trainer, Config
 
 
 #==================================================================================================
@@ -20,6 +22,8 @@ class NCA_Config:
 	perception_dims: int = 3
 	update_features: Iterable[int] = (64, 64)
 	mask: jnp.array = None
+
+default_config = lambda : NCA_Config(channels = 8)
 
 class PerceptionNet(nn.Module):
 	config: NCA_Config
@@ -52,9 +56,9 @@ class NCA3D(nn.Module):
 	config: NCA_Config
 
 	def setup(self):
-		self.perception_net = PerceptionNet(config)
-		self.update_net = UpdateNetwork(config)
-		self.mask = self.config.mask is self.config.mask is not None else 1.
+		self.perception_net = PerceptionNet(self.config)
+		self.update_net = UpdateNetwork(self.config)
+		self.mask = self.config.mask if self.config.mask is not None else 1.
 
 	def __call__(self, x):
 		
@@ -70,17 +74,13 @@ class NCA3D(nn.Module):
 #==================================================================================================
 #==================================================================================================
 
-@chex.dataclass
-class NDP_NCA_Config(Config):
-	nca_config: NCA_Config
-	iterations: int = 10
 
 class NCA_Trainer(NDP_Trainer):
 
 	#-------------------------------------------------------------------------
 
-	def __init__(self, config: NDP_NCA_Config):
-		assert isinstance(config, NDP_NCA_Config)
+	def __init__(self, config: Config):
+		assert isinstance(config.ndp_config, NCA_Config)
 		super().__init__(config)	
 
 	#-------------------------------------------------------------------------
@@ -89,20 +89,20 @@ class NCA_Trainer(NDP_Trainer):
 
 
 		H, W, D = self.config.hidden_dims, self.config.hidden_dims, self.config.hidden_layers+1
-		z_dims = C = self.config.nca_config.channels
+		z_dims = C = self.config.ndp_config.channels
 		#Generate mask
 		mask = jnp.zeros((H,W,D,1))
-		idims = self.config.input_dims
-		odims = self.config.output_dims
+		idims = self.obs_dims
+		odims = self.action_dims
 		xi = H//2 - idims//2
-		mask = mask.at[x:x+idims, :, 0, :].set(1.)
+		mask = mask.at[xi:xi+idims, :, 0, :].set(1.)
 		mask = mask.at[:, :, 1:-1, :].set(1.)
 		xo = W//2 - odims//2
-		mask = mask.at[:, x:x+odims, -1, :].set(1.)
+		mask = mask.at[:, xo:xo+odims, -1, :].set(1.)
 		#initiate nca
-		nca_config = self.config.nca_config
+		nca_config = self.config.ndp_config
 		nca_config.mask = mask
-		nca = NCA3D(self.config.nca_config)
+		nca = NCA3D(self.config.ndp_config)
 		x = jnp.zeros((H,W,D,C))
 		params = nca.init(random.PRNGKey(42), x)
 		params_shaper = ParameterReshaper(params)

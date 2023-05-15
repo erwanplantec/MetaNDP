@@ -16,12 +16,17 @@ class MLP(nn.Module):
 			x = nn.relu(layer(x))
 		return self.out_layer(x)
 
-def f(x):
-	def g(y):
-		return y*x
-	return g(x)
+
+def sparsity(x):
+	dists = jnp.sqrt(jnp.sum(x[:, None, :] - x[None, :, :], axis=-1)**2)
+	return jnp.mean(dists)
+
+def ind_sparsity(x):
+	dists = jnp.sqrt(jnp.sum(x[:, None, :] - x[None, :, :], axis=-1)**2)
+	return jnp.mean(dists, axis=-1)
+
 
 if __name__ == "__main__":
-	print(f(4))
-	print(f(5))
-	print(f(6))
+	key = jax.random.PRNGKey(44)
+	x = jax.random.normal(key, (100, 2)) * 10 
+	print(sparsity(x))
