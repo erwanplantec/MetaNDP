@@ -20,7 +20,8 @@ def env_step_scan(env_step, policy, env_params):
 	def scan_step(carry, x):
 		key, obs, state, policy_params = carry
 		key, key_step, key_policy = jax.random.split(key, 3)
-		action = policy(key_policy, policy_params, obs)
+		logits = policy(key_policy, policy_params, obs)
+		action = jax.random.categorical(key_policy, logits)
 		n_obs, n_state, rew, done, _ = env_step(key_step, state, action, env_params)
 		
 		n_carry = [key, n_obs, n_state, policy_params]
@@ -29,7 +30,8 @@ def env_step_scan(env_step, policy, env_params):
 			"rewards": rew,
 			"obs": obs,
 			"dones": done,
-			"actions": action
+			"actions": action,
+			"logits": logits
 		}
 
 		return n_carry, y

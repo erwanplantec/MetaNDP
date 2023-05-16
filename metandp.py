@@ -8,11 +8,11 @@ from dataclasses import field
 from functools import partial
 from typing import *
 from evosax import (
-	OpenES, CMA_ES, PGPE, SimpleGA, LES, RandomSearch,
+	OpenES, CMA_ES, PGPE, SimpleGA, LES, RandomSearch, DES,
 	ParameterReshaper, FitnessShaper
 )
-from utils import MLP, sparsity, ind_sparsity
-from envs import env_step_scan, bd_mountain_car
+from evaluators.core import Evaluator
+from utils import scan_print
 
 #=========================================================================
 #=================================UTILS===================================
@@ -24,15 +24,18 @@ es_map = {
 	"pgpe": PGPE,
 	"simple-ga": SimpleGA,
 	"les": LES,
+	"des": DES,
 	"random": RandomSearch
 }
 
-bd_extractors = {
-	"MountainCar-v0": bd_mountain_car,
-}
+def scan_print_formatter(i, c, y):
+	fit = y["fitness"]
+	es_state = y["es_state"]
+	avg_fit = jnp.mean(fit)
+	top_fit = jnp.max(fit)
+	best_fit = es_state.best_fitness
 
-def sparsity_score_fn(rollout_data):
-	return ind_sparsity(rollout_data["bd"])
+	return f"OUTER LOOP #{i} : avg = {avg_fit}, top = {top_fit}, best = {best_fit}"
 
 #=========================================================================
 #==================================META-NDP===============================
@@ -43,15 +46,13 @@ def sparsity_score_fn(rollout_data):
 class Config:
 
 	epochs: int
-	
-	ndp: object
-
-	evaluator: Evaluator
 
 	n_params: int
-	params_shaper: ParamterReshaper
+	params_shaper: ParameterReshaper
+	
 	es: str = "openes"
-	es_config: Collection = field(default_factory=partial(dict, popsize=64))
+	popsize: int = 128
+	es_config: Collection = field(default_factory=dict)
 	es_params: Collection = None
 
 
@@ -60,22 +61,21 @@ class Config:
 class NDP_Trainer:
 	#-------------------------------------------------------------------------
 	
-	def __init__(self, config: Config):
+	def __init__(self, config: Config, ndp: nn.Module, evaluator: Evaluator):
 		
 		self.config = config
-		self.env_rollout, self.policy, self.obs_dims, self.action_dims = self.init_env()
 		self.es, self.es_params, self.es_fitness_shaper = self.init_es()
-		self.eval = self.config.evaluator
+		self.eval = evaluator
 		self.train = self._build_trainer()
 
 	#-------------------------------------------------------------------------
 
 	def init_es(self):
 
-		es = es_map[self.config.oes](num_dims=self.config.n_params, 
-			**self.config.es_config)
-		os_params = es.default_params if self.config.es_params is None \
-									  else self.config.os_params
+		es = es_map[self.config.es](num_dims=self.config.n_params, 
+			popsize=self.config.popsize, **self.config.es_config)
+		es_params = es.default_params if self.config.es_params is None \
+									  else self.config.es_params
 		fitness_shaper = FitnessShaper(maximize=True)
 		
 		return es, es_params, fitness_shaper
@@ -84,24 +84,38 @@ class NDP_Trainer:
 	
 	def _build_trainer(self)->Callable:
 
-		@jax.jit
-		def oes_step(carry, iter):
-			oes_state, key = carry
+		@scan_print(rate=1, formatter=scan_print_formatter)
+		def es_step(carry, iter):
+			
+			es_state, key = carry
 			key, ask_key, eval_key = random.split(key, 3)
-			ndp_params_flat, oes_state = self.oes.ask(ask_key, oes_state, self.oes_params)
+			
+			ndp_params_flat, es_state = self.es.ask(ask_key, es_state, self.es_params)
 			ndp_params = self.config.params_shaper.reshape(ndp_params_flat)
-			fitness = self.eval(ndp_params, eval_key)
-			fitness_re = self.oes_fitness_shaper.apply(ndp_params_flat, fitness)
-			oes_state = self.oes.tell(ndp_params_flat, fitness_re, oes_state, self.oes_params)
+			
+			eval_key = jax.random.split(eval_key, self.config.popsize)
+			fitness, eval_data = jax.jit(jax.vmap(self.eval, in_axes=(0, 0)))(ndp_params, eval_key)
+			fitness_re = self.es_fitness_shaper.apply(ndp_params_flat, fitness)
+			
+			es_state = self.es.tell(ndp_params_flat, fitness_re, es_state, self.es_params)
 
-			return [oes_state, key], fitness
+			data = {
+				"fitness": fitness, 
+				"es_state": es_state, 
+				"ndp_params": ndp_params,
+				"eval_data": eval_data
+			}
+
+			return [es_state, key], data
 
 		def train(key: random.PRNGKey):
 			
 			key, init_key = random.split(key)
-			oes_state = self.oes.initialize(init_key, self.oes_params)
+			es_state = self.es.initialize(init_key, self.es_params)
 			gens = jnp.arange(self.config.epochs)
-			[oes_state, _], data = jax.lax.scan(oes_step, [oes_state, key], gens)
+			[es_state, _], data = jax.lax.scan(es_step, [es_state, key], gens)
+
+			return data
 
 		return train
 		

@@ -1,9 +1,13 @@
 import jax
 import jax.numpy as jnp
+import jax.random as random
 import flax.linen as nn
+import chex
 from typing import *
 from dataclasses import field
 from evosax import ParameterReshaper
+from utils import MLP
+from envs import env_step_scan
 
 
 @chex.dataclass
@@ -12,23 +16,23 @@ class Config:
 
 	env: object
 	env_params: Collection
+	env_steps: int
 
 	mlp_hidden_dims: int
 	mlp_hidden_layers: int
 
 	n_params: int
-	ndp: nn.Module
 
 
 class Evaluator:
 
-	def __init__(self, config: Config):
+	def __init__(self, config: Config, ndp: nn.Module):
 
 		self.config = config
 		
 		self.env_rollout, self.policy, self.obs_dims, self.action_dims = self.init_env()
 
-		self.ndp, self.z_dims = self.init_ndp()
+		self.ndp = ndp
 
 		self.eval = self._build_eval()
 
@@ -52,13 +56,13 @@ class Evaluator:
 			
 		def policy(key, params, obs):
 			logits = mlp.apply(params, obs)
-			return random.categorical(key, logits)
+			return logits
 
 		scan_step = env_step_scan(env.step, policy, env_params)
 		def rollout(key, policy_params):
 			key_reset, key_step = random.split(key)
 			obs, state = env.reset(key_reset, env_params)
-			xs = jnp.arange(self.config.env_steps_per_epidode)
+			xs = jnp.arange(self.config.env_steps)
 			# get env rollout
 			_, scan_out = jax.lax.scan(
 				scan_step, [key_step, obs, state, policy_params], xs

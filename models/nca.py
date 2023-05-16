@@ -70,7 +70,7 @@ class NCA3D(nn.Module):
 #==================================================================================================
 
 @chex.dataclass
-class NCA_NDP_Config(NCA_Config):
+class HyperNCA_Config(NCA_Config):
 	iterations: int = 10
 	action_dims: int = 2
 	obs_dims: int = 2
@@ -78,9 +78,9 @@ class NCA_NDP_Config(NCA_Config):
 	hidden_layers: int = 2
 
 
-class NCA_NDP(nn.Module):
+class HyperNCA(nn.Module):
 
-	config: NCA_NDP_Config
+	config: HyperNCA_Config
 
 	#-------------------------------------------------------------------------
 
@@ -127,11 +127,11 @@ class NCA_NDP(nn.Module):
 			"out_layer": {"kernel": w[:, xo:xo+odims, -1, 0]},
 			**{
 				f"layers_{i}": {"kernel": w[:, :, i, 0]}
-			for i in range(1, D)}
+			for i in range(1, D-1)}
 		}
 		mlp_params = {"params": mlp_params}
 		
-		return mlp_params
+		return mlp_params, w, self.mask
 
 
 

@@ -1,6 +1,7 @@
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from jax.experimental import host_callback
 
 class MLP(nn.Module):
 	output_dims: int
@@ -17,16 +18,50 @@ class MLP(nn.Module):
 		return self.out_layer(x)
 
 
-def sparsity(x):
-	dists = jnp.sqrt(jnp.sum(x[:, None, :] - x[None, :, :], axis=-1)**2)
-	return jnp.mean(dists)
+def scan_print(rate=50, formatter=None):
 
-def ind_sparsity(x):
-	dists = jnp.sqrt(jnp.sum(x[:, None, :] - x[None, :, :], axis=-1)**2)
-	return jnp.mean(dists, axis=-1)
+	if formatter is None:
+		formatter = lambda i, c, y: f"iteration #{i}"
+
+	def tap_func(args, transforms):
+		print(formatter(*args))
+
+	def _print(i, c, y):
+
+		_ = jax.lax.cond(
+			i % rate == 0,
+			lambda _: host_callback.id_tap(tap_func, [i, c, y], result=i),
+			lambda _: i,
+			operand = None
+		)
+
+	def func_wrapper(func):
+
+		def wrapped_func(carry, x):
+			if type(x) is tuple:
+				it, *_ = x
+			else:
+				it = x  
+			n_carry, y = func(carry, x)
+			_print(it, carry, y)
+			return n_carry, y
+
+		return wrapped_func
+
+	return func_wrapper
+
+
 
 
 if __name__ == "__main__":
-	key = jax.random.PRNGKey(44)
-	x = jax.random.normal(key, (100, 2)) * 10 
-	print(sparsity(x))
+
+	@scan_print(rate=1)
+	def f(c, x):
+		return c, x
+
+	c, ys = jax.lax.scan(f, 1., jnp.arange(10))
+
+
+
+
+
