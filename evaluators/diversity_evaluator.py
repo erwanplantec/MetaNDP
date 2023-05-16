@@ -12,6 +12,7 @@ from evosax import (
 	ParameterReshaper, FitnessShaper
 )
 from utils import scan_print
+from gymnax.visualize import Visualizer
 
 def scan_print_formatter(i, c, y):
 	bds = y["bd"]
@@ -82,6 +83,37 @@ class DiversityEvaluator(core.Evaluator):
 
 		return evaluate
 
+	#-------------------------------------------------------------------------
+
+	def test(self, key: random.PRNGKey, ndp_params: Collection, n_samples: int=5,
+		render: bool=False, save_file: str="anim"):
+		key, ask_key, rollout_key = random.split(key, 3)
+		z = jax.random.uniform(ask_key, (n_samples, self.config.n_params),
+			minval=-1., maxval=1.) # get random seeds
+		policy_params, *_ = jax.vmap(self.ndp.apply, in_axes=(None, 0))(ndp_params, z)
+		rollout_keys = jax.random.split(rollout_key, n_samples)
+		rollout_data = jax.vmap(self.env_rollout, in_axes=(0, 0))(rollout_keys, policy_params)
+		bds = jax.vmap(self.config.bd_extractor)(rollout_data)
+		spars = sparsity(bd)
+
+		if render:
+			files = []
+
+			states = rollout_data['states']
+			states = [jax.tree_map(lambda x: x[i], states) for i in range(n_samples)]
+			states = [
+				[jax.tree_map(lambda x: x[i], stacked_seq) for i in range(self.config.env_steps)]
+			for stacked_seq in states]
+
+			for ind, seq in enumerate(states):
+				vis = Visualizer(self.config.env, self.config.env_params, seq)
+				file = f"{save_file}_{ind}.gif"
+				files.append(file)
+				vis.animate(file)
+			return spars, rollout_data, files
+
+
+		return spars, rollout_data
 
 if __name__ == "__main__":
 	x = jax.random.uniform(jax.random.PRNGKey(62), (10, 2))

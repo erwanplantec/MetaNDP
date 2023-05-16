@@ -115,7 +115,7 @@ class NDP_Trainer:
 			gens = jnp.arange(self.config.epochs)
 			[es_state, _], data = jax.lax.scan(es_step, [es_state, key], gens)
 
-			return data
+			return es_state, data
 
 		return train
 		
