@@ -15,39 +15,28 @@ from utils import scan_print
 from gymnax.visualize import Visualizer
 
 def scan_print_formatter(i, c, y):
-	bds = y["bd"]
 	msg = f"	INNER LOOP #{i}"
 	return msg
 
 
-def sparsity(x):
-	dists = jnp.sqrt(jnp.sum(x[:, None, :] - x[None, :, :], axis=-1)**2)
-	return jnp.mean(dists)
+def C(X, Y):
+	"""measure compositionality of process f such that Y = f(X)
+	X and Y are 2D arrays"""
+	dists_X = jnp.sqrt(jnp.sum(X[:, None, :] - X[None, :, :], axis=-1)**2)
+	dists_Y = jnp.sqrt(jnp.sum(Y[:, None, :] - Y[None, :, :], axis=-1)**2)
 
-def ind_sparsity(x):
-	dists = jnp.sqrt(jnp.sum(x[:, None, :] - x[None, :, :], axis=-1)**2)
-	return jnp.mean(dists, axis=-1)
+	dists_X = jnp.reshape(dists_X, -1)
+	dists_Y = jnp.reshape(dists_Y, -1)
 
-def build_knn_sparsity(n: int, k: int = 3):
-	def knn_sparsity(x):
-		dists = jnp.sqrt(jnp.sum(x[:, None, :] - x[None, :, :], axis=-1)**2)
-		res = 0.
-		for i in range(n):
-			idxs = jnp.argsort(dists[i])
-			knn = idxs[1:k+1]
-			res += jnp.mean(dists[i, knn])
-		return res / n
-	return knn_sparsity
+	return jnp.corrcoef(dists_X, dists_Y)[0, -1]
+
 
 @chex.dataclass
-class DiversityEvaluator_Config(core.Config):
+class CompositionalityEvaluator_Config(core.Config):
 	bd_extractor: Callable
 	popsize: int = 100
 
-	score_fn: str = "sparsity"
-
-
-class DiversityEvaluator(core.Evaluator):
+class CompositionalityEvaluator(core.Evaluator):
 
 	#-------------------------------------------------------------------------
 
@@ -55,16 +44,9 @@ class DiversityEvaluator(core.Evaluator):
 
 		bd_extractor = self.config.bd_extractor
 
-		score_fn_map = {
-			'sparsity': sparsity,
-			'knn_sparsity': build_knn_sparsity(self.config.popsize)
-		}
-		score_fn = score_fn_map.get(self.config.score_fn, sparsity)
-
-	
 		def evaluate(ndp_params: Collection, key:random.PRNGKey)->jnp.array:
 
-			@scan_print(rate=1, formatter=scan_print_formatter)
+			@scan_print(rate=10, formatter=scan_print_formatter)
 			def es_step(carry, iter):
 				
 				key = carry
@@ -79,11 +61,12 @@ class DiversityEvaluator(core.Evaluator):
 				bd = jax.vmap(bd_extractor)(rollout_data) #(popsize, bd_dims)
 				rollout_data["bd"] = bd
 				
-				score = score_fn(bd)
+				score = C(z, bd) #compute compositionality coefficient
 
 				data = {
 					'score': score, 
 					"bd": bd,
+					"z": z,
 					"rollout_data": rollout_data,
 				}
 
@@ -103,37 +86,29 @@ class DiversityEvaluator(core.Evaluator):
 
 	#-------------------------------------------------------------------------
 
-	def test(self, key: random.PRNGKey, ndp_params: Collection, n_samples: int=5,
-		render: bool=False, save_file: str="anim"):
+	def test(self, key: random.PRNGKey, ndp_params: Collection, n_samples: int=5):
 		key, ask_key, rollout_key = random.split(key, 3)
 		z = jax.random.uniform(ask_key, (n_samples, self.config.n_params),
 			minval=-1., maxval=1.) # get random seeds
 		policy_params = jax.vmap(self.ndp.apply, in_axes=(None, 0))(ndp_params, z)
 		rollout_keys = jax.random.split(rollout_key, n_samples)
 		rollout_data = jax.vmap(self.env_rollout, in_axes=(0, 0))(rollout_keys, policy_params)
-		bds = jax.vmap(self.config.bd_extractor)(rollout_data)
-		spars = sparsity(bds)
+		bd = jax.vmap(self.config.bd_extractor)(rollout_data)
+		score = C(z, bd)
 
-		if render:
-			files = []
-
-			states = rollout_data['states']
-			states = [jax.tree_map(lambda x: x[i], states) for i in range(n_samples)]
-			states = [
-				[jax.tree_map(lambda x: x[i], stacked_seq) for i in range(self.config.env_steps)]
-			for stacked_seq in states]
-
-			for ind, seq in enumerate(states):
-				vis = Visualizer(self.config.env, self.config.env_params, seq)
-				file = f"{save_file}_{ind}.gif"
-				files.append(file)
-				vis.animate(file)
-			return spars, rollout_data, files
+		data = {
+			"env_data": rollout_data,
+			"z": z,
+			"bd": bd
+		}
 
 
-		return spars, rollout_data
+		return score, data
 
-if __name__ == "__main__":
-	x = jax.random.uniform(jax.random.PRNGKey(62), (10, 2))
-	sp = sparsity(x)
-	print(sp)
+if __name__ == '__main__':
+	key = jax.random.PRNGKey(42)
+	key1, key2 = jax.random.split(key)
+	X = jax.random.uniform(key1, (20, 10))
+	Y = jax.random.uniform(key2, (20, 3))
+
+	print(C(X, Y))

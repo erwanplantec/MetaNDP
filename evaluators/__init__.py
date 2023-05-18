@@ -1,1 +1,3 @@
 from evaluators.diversity_evaluator import DiversityEvaluator, DiversityEvaluator_Config
+from evaluators.simple_evaluator import SimpleEvaluator, SimpleEvaluator_Config
+from evaluators.compositionality_evaluator import CompositionalityEvaluator, CompositionalityEvaluator_Config

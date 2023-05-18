@@ -131,7 +131,7 @@ class HyperNCA(nn.Module):
 		}
 		mlp_params = {"params": mlp_params}
 		
-		return mlp_params, w, self.mask
+		return mlp_params
 
 
 
