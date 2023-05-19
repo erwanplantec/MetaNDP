@@ -7,7 +7,30 @@ from typing import *
 from dataclasses import field
 from evosax import ParameterReshaper
 from utils import MLP
-from envs import env_step_scan
+
+def env_step_scan(env_step: Callable, policy: nn.Module, env_params: Collection):
+	"""
+	env_step : key x state x action -> obs, state, rew, done, _
+	policy : key x params x obs -> action 
+	"""
+	def scan_step(carry, x):
+		key, obs, state, policy_params = carry
+		key, key_step, key_policy = jax.random.split(key, 3)
+		action = policy.apply(policy_params, obs, key_policy)
+		n_obs, n_state, rew, done, _ = env_step(key_step, state, action, env_params)
+		
+		n_carry = [key, n_obs, n_state, policy_params]
+		y = {
+			"states": n_state, 
+			"rewards": rew,
+			"obs": obs,
+			"dones": done,
+			"actions": action,
+		}
+
+		return n_carry, y
+
+	return scan_step
 
 
 @chex.dataclass
@@ -18,19 +41,18 @@ class Config:
 	env_params: Collection
 	env_steps: int
 
-	mlp_hidden_dims: int
-	mlp_hidden_layers: int
-
 	n_params: int
 
 
 class Evaluator:
 
-	def __init__(self, config: Config, ndp: nn.Module):
+	def __init__(self, config: Config, ndp: nn.Module, policy: nn.Module):
 
 		self.config = config
 		
-		self.env_rollout, self.policy, self.obs_dims, self.action_dims = self.init_env()
+		self.policy = policy
+
+		self.env_rollout = self.init_env()
 
 		self.ndp = ndp
 
@@ -46,19 +68,11 @@ class Evaluator:
 
 	def init_env(self):
 
-
 		env, env_params = self.config.env, self.config.env_params
 		obs_shape = env.observation_space(env_params).shape
 		n_actions = env.action_space(env_params).n
 
-		mlp = MLP(n_actions, self.config.mlp_hidden_dims, self.config.mlp_hidden_layers)
-		_ = mlp.init(random.PRNGKey(42), jnp.zeros(obs_shape))
-			
-		def policy(key, params, obs):
-			logits = mlp.apply(params, obs)
-			return logits
-
-		scan_step = env_step_scan(env.step, policy, env_params)
+		scan_step = env_step_scan(env.step, self.policy, env_params)
 		def rollout(key, policy_params):
 			key_reset, key_step = random.split(key)
 			obs, state = env.reset(key_reset, env_params)
@@ -70,7 +84,7 @@ class Evaluator:
 			
 			return scan_out
 
-		return rollout, policy, obs_shape[0], n_actions
+		return rollout
 
 
 	#-------------------------------------------------------------------------

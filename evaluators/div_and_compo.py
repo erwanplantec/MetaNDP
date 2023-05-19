@@ -1,5 +1,5 @@
 from evaluators import core
-from evaluators.metrics import C
+from evaluators.metrics import knn_sparsity, C
 import jax
 import jax.numpy as jnp
 import jax.random as random
@@ -19,11 +19,11 @@ def scan_print_formatter(i, c, y):
 
 
 @chex.dataclass
-class CompositionalityEvaluator_Config(core.Config):
+class CompoDivEvaluator_Config(core.Config):
 	bd_extractor: Callable
 	popsize: int = 100
 
-class CompositionalityEvaluator(core.Evaluator):
+class CompoDivEvaluator(core.Evaluator):
 
 	#-------------------------------------------------------------------------
 
@@ -33,7 +33,7 @@ class CompositionalityEvaluator(core.Evaluator):
 
 		def evaluate(ndp_params: Collection, key:random.PRNGKey)->jnp.array:
 
-			@scan_print(rate=10, formatter=scan_print_formatter)
+			@scan_print(rate=1, formatter=scan_print_formatter)
 			def es_step(carry, iter):
 				
 				key = carry
@@ -48,10 +48,14 @@ class CompositionalityEvaluator(core.Evaluator):
 				bd = jax.vmap(bd_extractor)(rollout_data) #(popsize, bd_dims)
 				rollout_data["bd"] = bd
 				
-				score = C(z, bd) #compute compositionality coefficient
+				compo = C(z, bd) #compute compositionality coefficient
+				div = knn_sparsity(bd, self.config.popsize, 5)
+				score = compo + 10*div
 
 				data = {
-					'score': score, 
+					'score': score,
+					'compo': compo,
+					'div': div, 
 					"bd": bd,
 					"z": z,
 					"rollout_data": rollout_data,
@@ -81,10 +85,14 @@ class CompositionalityEvaluator(core.Evaluator):
 		rollout_keys = jax.random.split(rollout_key, n_samples)
 		rollout_data = jax.vmap(self.env_rollout, in_axes=(0, 0))(rollout_keys, policy_params)
 		bd = jax.vmap(self.config.bd_extractor)(rollout_data)
-		score = C(z, bd)
+		compo = C(z, bd) #compute compositionality coefficient
+		div = knn_sparsity(bd, self.config.popsize, 5)
+		score = compo + 10*div
 
 		data = {
 			"env_data": rollout_data,
+			'compo': compo,
+			'div': div, 		
 			"z": z,
 			"bd": bd
 		}

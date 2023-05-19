@@ -1,5 +1,6 @@
 from evaluators import core
-from envs import env_step_scan, bd_mountain_car
+from envs import bd_mountain_car
+from evaluators.metrics import sparsity, knn_sparsity
 
 import jax
 import jax.numpy as jnp
@@ -19,26 +20,6 @@ def scan_print_formatter(i, c, y):
 	msg = f"	INNER LOOP #{i}"
 	return msg
 
-
-def sparsity(x):
-	dists = jnp.sqrt(jnp.sum(x[:, None, :] - x[None, :, :], axis=-1)**2)
-	return jnp.mean(dists)
-
-def ind_sparsity(x):
-	dists = jnp.sqrt(jnp.sum(x[:, None, :] - x[None, :, :], axis=-1)**2)
-	return jnp.mean(dists, axis=-1)
-
-def build_knn_sparsity(n: int, k: int = 3):
-	def knn_sparsity(x):
-		dists = jnp.sqrt(jnp.sum(x[:, None, :] - x[None, :, :], axis=-1)**2)
-		res = 0.
-		for i in range(n):
-			idxs = jnp.argsort(dists[i])
-			knn = idxs[1:k+1]
-			res += jnp.mean(dists[i, knn])
-		return res / n
-	return knn_sparsity
-
 @chex.dataclass
 class DiversityEvaluator_Config(core.Config):
 	bd_extractor: Callable
@@ -57,7 +38,7 @@ class DiversityEvaluator(core.Evaluator):
 
 		score_fn_map = {
 			'sparsity': sparsity,
-			'knn_sparsity': build_knn_sparsity(self.config.popsize)
+			'knn_sparsity': partial(knn_sparsity, n=self.config.popsize, k=3)
 		}
 		score_fn = score_fn_map.get(self.config.score_fn, sparsity)
 
@@ -84,6 +65,7 @@ class DiversityEvaluator(core.Evaluator):
 				data = {
 					'score': score, 
 					"bd": bd,
+					"z": z,
 					"rollout_data": rollout_data,
 				}
 

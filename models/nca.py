@@ -129,7 +129,7 @@ class HyperNCA(nn.Module):
 				f"layers_{i}": {"kernel": w[:, :, i, 0]}
 			for i in range(1, D-1)}
 		}
-		mlp_params = {"params": mlp_params}
+		mlp_params = {"params": {"mlp": mlp_params}}
 		
 		return mlp_params
 
