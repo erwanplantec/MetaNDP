@@ -83,7 +83,7 @@ class NDP_Trainer:
 	def _build_trainer(self)->Callable:
 
 		@jax.jit
-		@scan_print(rate=1, formatter=scan_print_formatter)
+		@scan_print(rate=10, formatter=scan_print_formatter)
 		def es_step(carry, iter):
 			
 			es_state, key = carry

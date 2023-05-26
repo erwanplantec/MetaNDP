@@ -16,8 +16,7 @@ from utils import scan_print
 from gymnax.visualize import Visualizer
 
 def scan_print_formatter(i, c, y):
-	bds = y["bd"]
-	msg = f"	INNER LOOP #{i}"
+	msg=""
 	return msg
 
 @chex.dataclass
@@ -38,14 +37,15 @@ class DiversityEvaluator(core.Evaluator):
 
 		score_fn_map = {
 			'sparsity': sparsity,
-			'knn_sparsity': partial(knn_sparsity, n=self.config.popsize, k=3)
+			'neg_sparsity': lambda x: -sparsity(x),
+			'knn_sparsity': partial(knn_sparsity, n=self.config.popsize, k=5),
+			'neg_knn_sparsity': lambda x: -knn_sparsity(x, self.config.popsize, 5)
 		}
 		score_fn = score_fn_map.get(self.config.score_fn, sparsity)
 
 	
 		def evaluate(ndp_params: Collection, key:random.PRNGKey)->jnp.array:
 
-			@scan_print(rate=1, formatter=scan_print_formatter)
 			def es_step(carry, iter):
 				
 				key = carry

@@ -50,7 +50,7 @@ class CompoDivEvaluator(core.Evaluator):
 				
 				compo = C(z, bd) #compute compositionality coefficient
 				div = knn_sparsity(bd, self.config.popsize, 5)
-				score = compo + 10*div
+				score = compo + 30.*div
 
 				data = {
 					'score': score,

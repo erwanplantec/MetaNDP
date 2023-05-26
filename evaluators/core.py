@@ -38,6 +38,7 @@ class Config:
 	epochs: int
 
 	env: object
+	env_backend: str
 	env_params: Collection
 	env_steps: int
 
@@ -68,21 +69,52 @@ class Evaluator:
 
 	def init_env(self):
 
-		env, env_params = self.config.env, self.config.env_params
-		obs_shape = env.observation_space(env_params).shape
-		n_actions = env.action_space(env_params).n
+		if self.config.env_backend == "gymnax":
 
-		scan_step = env_step_scan(env.step, self.policy, env_params)
-		def rollout(key, policy_params):
-			key_reset, key_step = random.split(key)
-			obs, state = env.reset(key_reset, env_params)
-			xs = jnp.arange(self.config.env_steps)
-			# get env rollout
-			_, scan_out = jax.lax.scan(
-				scan_step, [key_step, obs, state, policy_params], xs
-			)
+			env, env_params = self.config.env, self.config.env_params
+			obs_shape = env.observation_space(env_params).shape
+			n_actions = env.action_space(env_params).n
+
+			scan_step = env_step_scan(env.step, self.policy, env_params)
+			def rollout(key, policy_params):
+				key_reset, key_step = random.split(key)
+				obs, state = env.reset(key_reset, env_params)
+				xs = jnp.arange(self.config.env_steps)
+				# get env rollout
+				_, scan_out = jax.lax.scan(
+					scan_step, [key_step, obs, state, policy_params], xs
+				)
+				
+				return scan_out
+
+		elif self.config.env_backend == "brax":
+
+			env = self.config.env
+
+			def scan_step(carry, x):
+				key, state, policy_params = carry
+				key, key_policy = jax.random.split(key)
+				action = self.policy.apply(policy_params, state.obs, key_policy)
+				new_state = self.env.step(state, action)
+
+				y = {
+					"states": new_state,
+					"actions": action
+				}
+
+				return [key, new_state, policy_params], y
 			
-			return scan_out
+			def rollout(key, policy_params):
+				key_reset, key_step = random.split(key)
+				state = env.reset(key_reset)
+				xs = jnp.arange(self.config.env_steps)
+				# get env rollout
+				_, scan_out = jax.lax.scan(
+					scan_step, [key_step, state, policy_params], xs
+				)
+				
+				return scan_out
+
 
 		return rollout
 
