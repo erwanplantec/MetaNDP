@@ -65,8 +65,6 @@ class DiversityEvaluator(core.Evaluator):
 				data = {
 					'score': score, 
 					"bd": bd,
-					"z": z,
-					"rollout_data": rollout_data,
 				}
 
 				return key, data

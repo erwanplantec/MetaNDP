@@ -54,11 +54,7 @@ class CompoDivEvaluator(core.Evaluator):
 
 				data = {
 					'score': score,
-					'compo': compo,
-					'div': div, 
 					"bd": bd,
-					"z": z,
-					"rollout_data": rollout_data,
 				}
 
 				return key, data

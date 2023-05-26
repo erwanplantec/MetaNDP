@@ -52,9 +52,7 @@ class CompositionalityEvaluator(core.Evaluator):
 
 				data = {
 					'score': score, 
-					"bd": bd,
-					"z": z,
-					"rollout_data": rollout_data,
+					"bd": bd
 				}
 
 				return key, data
